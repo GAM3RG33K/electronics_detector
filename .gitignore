@@ -1,0 +1,155 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.py_env/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# PyTorch & Models
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+runs/
+weights/
+checkpoints/
+# Exception: Keep the base model
+!yolov8n.pt
+
+# Datasets & Training Data
+datasets/
+data/
+train/
+valid/
+test/
+*.zip
+electronics-*/
+Electronics-*/
+roboflow-dataset/
+# Add specific dataset folder name if different
+electronics-j0cxl*/
+
+# YOLO Training Outputs
+runs/
+exp/
+results/
+labels_cache/
+*.cache
+
+# Detection Results
+output/
+detections/
+screenshots/
+recordings/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+# Exception: Keep documentation images
+!docs/**/*.png
+!docs/**/*.jpg
+!README_*.png
+
+# IDE & Editors
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Logs
+logs/
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Documentation Build
+docs/_build/
+site/
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# Config overrides (if you create any)
+config.local.yaml
+config.local.json
+
+# Database files (for future analytics)
+*.db
+*.sqlite
+*.sqlite3
+
+# API Keys (just in case)
+*apikey*
+*api_key*
+*token*
+secrets.yaml
+credentials.json
+
+# Large files marker
+*.large
+
+.py_env/
