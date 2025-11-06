@@ -120,7 +120,6 @@ htmlcov/
 
 # Jupyter Notebooks
 .ipynb_checkpoints/
-*.ipynb
 
 # Documentation Build
 docs/_build/
@@ -153,3 +152,5 @@ credentials.json
 *.large
 
 .py_env/
+electronics_training/
+training-data/
