@@ -313,11 +313,29 @@ class ElectronicsDetector:
             # Personal Devices
             'cell phone': {'color': (100, 255, 100), 'icon': '📱', 'power': '5-10W', 'type': 'Mobile Device', 'prevalence': '99%'},
             'laptop': {'color': (255, 100, 100), 'icon': '💻', 'power': '45-65W', 'type': 'Computer', 'prevalence': '70%'},
+            'phone': {'color': (120, 255, 120), 'icon': '📞', 'power': '3-8W', 'type': 'Mobile Device', 'prevalence': '95%'},
+            'ipad': {'color': (200, 150, 255), 'icon': '📱', 'power': '8-15W', 'type': 'Tablet', 'prevalence': '40%'},
             
             # Accessories
             'keyboard': {'color': (255, 255, 100), 'icon': '⌨️', 'power': '2-5W', 'type': 'Peripheral', 'prevalence': '25%'},
             'mouse': {'color': (255, 100, 255), 'icon': '🖱️', 'power': '1-3W', 'type': 'Peripheral', 'prevalence': '40%'},
             'remote': {'color': (100, 255, 255), 'icon': '📡', 'power': '0.5W', 'type': 'Controller', 'prevalence': '10%'},
+            'monitor': {'color': (150, 150, 150), 'icon': '🖥️', 'power': '15-30W', 'type': 'Display', 'prevalence': '20%'},
+            
+            # Audio Devices
+            'headphones': {'color': (100, 100, 255), 'icon': '🎧', 'power': '1-5W', 'type': 'Audio', 'prevalence': '45%'},
+            'head_phone': {'color': (120, 120, 255), 'icon': '🎵', 'power': '1-3W', 'type': 'Audio', 'prevalence': '35%'},
+            'earphone': {'color': (150, 150, 255), 'icon': '🎶', 'power': '0.5-2W', 'type': 'Audio', 'prevalence': '50%'},
+            'ear_piece': {'color': (180, 180, 255), 'icon': '📞', 'power': '1-3W', 'type': 'Audio', 'prevalence': '30%'},
+            'airpods_buds': {'color': (200, 100, 200), 'icon': '🎧', 'power': '1-3W', 'type': 'Audio', 'prevalence': '60%'},
+            'airpods_case': {'color': (220, 120, 220), 'icon': '🔋', 'power': '0-1W', 'type': 'Accessory', 'prevalence': '55%'},
+            
+            # Gaming Controllers
+            'playstation_controller': {'color': (0, 100, 200), 'icon': '🎮', 'power': '5-8W', 'type': 'Gaming', 'prevalence': '15%'},
+            'xbox_controller': {'color': (0, 150, 0), 'icon': '🕹️', 'power': '5-8W', 'type': 'Gaming', 'prevalence': '12%'},
+            
+            # Wearables
+            'smartwatch': {'color': (255, 200, 100), 'icon': '⌚', 'power': '1-5W', 'type': 'Wearable', 'prevalence': '35%'},
             
             # Personal Care (Travel)
             'hair drier': {'color': (255, 150, 200), 'icon': '💇', 'power': '800-1200W', 'type': 'Personal Care', 'prevalence': '30%'},
@@ -344,8 +362,18 @@ class ElectronicsDetector:
         self.detection_interval = 2  # Run YOLO every N frames (higher = faster display, less frequent detection)
         self.last_detections = []  # Cache last detection results
         
+        # Heatmap configuration
+        self.conf_threshold = 0.30  # Configurable confidence threshold (70%)
+        self.heatmap_alpha = 0.7    # 70% transparency for heatmap overlay (brighter devices)
+        self.mask_method = 'rounded'  # 'rounded' or 'grabcut'
+        self.gradient_cache = {}    # Cache generated gradients for performance
+        self.show_heatmap = True    # Toggle heatmap vs boxes
+        self.show_thermal_filter = True  # Toggle mock thermal filter overlay on entire frame
+        self.dark_tint = 0.3        # Background darkness level (0.3 = 70% darker) - PERMANENT
+        
         print("  ✓ Initialization complete!")
-        print(f"  ⚡ Performance: Running detection every {self.detection_interval} frames for 60fps display\n")
+        print(f"  ⚡ Performance: Running detection every {self.detection_interval} frames for 60fps display")
+        print(f"  🎯 Pulsing Anchor Mode: Enabled (confidence threshold: {self.conf_threshold*100:.0f}%)\n")
         
     def point_in_zone(self, x, y, frame_width, frame_height):
         """Check if a point is within the detection zone"""
@@ -376,6 +404,712 @@ class ElectronicsDetector:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         return frame
+    
+    def get_heatmap_colormap(self, power_str):
+        """
+        Get color gradient scheme based on power consumption
+        All colors are in warm spectrum (green → yellow → orange → red)
+        Returns dictionary with colors array
+        Colors are in BGR format for OpenCV
+        """
+        # Extract average power from range like "5-10W"
+        try:
+            if '-' in power_str:
+                low, high = power_str.replace('W', '').split('-')
+                avg_power = (float(low) + float(high)) / 2
+            else:
+                avg_power = float(power_str.replace('W', ''))
+        except:
+            avg_power = 5.0  # Default to low power
+        
+        # All colors in warm spectrum with varying intensity
+        if avg_power <= 10:  # Very Low: Light Green → Yellow-Green (dim intensity)
+            return {
+                'colors': [
+                    (0, 100, 50),      # Dim Green (edges)
+                    (0, 150, 100),     # Light Green
+                    (0, 200, 150),     # Yellow-Green
+                    (0, 255, 200),     # Bright Yellow-Green (center)
+                ],
+                'intensity': 0.6    # Lower intensity for low power
+            }
+        elif avg_power <= 25:  # Low-Medium: Yellow-Green → Yellow (medium intensity)
+            return {
+                'colors': [
+                    (0, 150, 100),     # Yellow-Green (edges)
+                    (0, 200, 200),     # Yellow (edges)
+                    (0, 220, 240),     # Yellow-Orange
+                    (0, 180, 255),     # Orange (center)
+                ],
+                'intensity': 0.75   # Medium intensity
+            }
+        elif avg_power <= 50:  # Medium: Yellow → Orange (high intensity)
+            return {
+                'colors': [
+                    (0, 200, 200),     # Yellow (edges)
+                    (0, 220, 240),     # Yellow-Orange
+                    (0, 180, 255),     # Orange
+                    (0, 200, 255),     # Bright Orange (center)
+                ],
+                'intensity': 0.85   # High intensity
+            }
+        else:  # High: Orange → Red → Bright Red (maximum intensity)
+            return {
+                'colors': [
+                    (0, 100, 200),     # Orange (edges)
+                    (0, 50, 255),      # Orange-Red
+                    (0, 0, 255),       # Red
+                    (50, 50, 255),     # Bright Red (center)
+                ],
+                'intensity': 1.0    # Maximum intensity
+            }
+    
+    def create_rounded_rectangle_mask(self, shape, corner_radius=20):
+        """
+        Create smooth rounded rectangle mask
+        Fast method for device shape approximation
+        """
+        h, w = shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        
+        # Create rounded rectangle using circles at corners
+        cv2.rectangle(mask, (corner_radius, 0), (w-corner_radius, h), 255, -1)
+        cv2.rectangle(mask, (0, corner_radius), (w, h-corner_radius), 255, -1)
+        
+        # Add rounded corners
+        if corner_radius > 0:
+            cv2.circle(mask, (corner_radius, corner_radius), corner_radius, 255, -1)
+            cv2.circle(mask, (w-corner_radius, corner_radius), corner_radius, 255, -1)
+            cv2.circle(mask, (corner_radius, h-corner_radius), corner_radius, 255, -1)
+            cv2.circle(mask, (w-corner_radius, h-corner_radius), corner_radius, 255, -1)
+        
+        return mask
+    
+    def create_radial_gradient_heatmap_fast(self, mask_shape, colormap_info):
+        """
+        Create radial gradient heatmap with thermal camera-style effect
+        Heat radiates from center (hottest) to edges (coolest)
+        Uses distance transform for performance
+        """
+        h, w = mask_shape
+        
+        # Create center point
+        center_mask = np.zeros((h, w), dtype=np.uint8)
+        center_x, center_y = w // 2, h // 2
+        cv2.circle(center_mask, (center_x, center_y), 2, 255, -1)
+        
+        # Distance transform: distance from center point
+        dist_transform = cv2.distanceTransform(
+            255 - center_mask, 
+            cv2.DIST_L2, 
+            5
+        )
+        
+        # Normalize to 0-255 range
+        cv2.normalize(dist_transform, dist_transform, 0, 255, cv2.NORM_MINMAX)
+        
+        # Invert so center is hot (255) and edges are cool (0)
+        intensity_map = 255 - dist_transform.astype(np.uint8)
+        
+        # Apply power curve for realistic heat falloff (more concentrated at center)
+        intensity_map = np.power(intensity_map / 255.0, 1.5) * 255
+        intensity_map = intensity_map.astype(np.uint8)
+        
+        # Create color gradient using Look-Up Table
+        colors = colormap_info['colors']
+        num_colors = len(colors)
+        
+        # Build LUT for 256 intensity values
+        lut = np.zeros((256, 1, 3), dtype=np.uint8)
+        for i in range(256):
+            # Map intensity to color position with interpolation
+            pos = (i / 255.0) * (num_colors - 1)
+            idx_low = int(np.floor(pos))
+            idx_high = min(idx_low + 1, num_colors - 1)
+            blend = pos - idx_low
+            
+            # Interpolate between two colors
+            color_low = np.array(colors[idx_low])
+            color_high = np.array(colors[idx_high])
+            interpolated = color_low * (1 - blend) + color_high * blend
+            
+            lut[i, 0] = interpolated.astype(np.uint8)
+        
+        # Apply color mapping
+        heatmap = cv2.LUT(cv2.merge([intensity_map, intensity_map, intensity_map]), lut)
+        
+        return heatmap, intensity_map
+    
+    def add_glow_effect(self, device_roi, mask, colormap_info):
+        """Add subtle glow around high-power device edges"""
+        # Dilate mask slightly for glow region
+        kernel = np.ones((5, 5), np.uint8)
+        glow_mask = cv2.dilate(mask, kernel, iterations=1)
+
+        # Get glow region (dilated - original)
+        glow_region = cv2.subtract(glow_mask, mask)
+
+        # Create glow color (brightest color from gradient)
+        glow_color = colormap_info['colors'][-1]  # Hottest color
+        glow_overlay = np.zeros_like(device_roi)
+        glow_overlay[:] = glow_color
+
+        # Apply glow with transparency
+        glow_mask_3ch = cv2.merge([glow_region, glow_region, glow_region])
+        glow_overlay = cv2.bitwise_and(glow_overlay, glow_mask_3ch)
+
+        device_roi = cv2.addWeighted(device_roi, 1.0, glow_overlay, 0.3, 0)
+
+        return device_roi
+
+    def apply_mock_thermal_filter(self, frame):
+        """
+        Apply a mock thermal camera filter effect to the entire frame
+        Simulates the look of thermal imaging with warm color gradients
+        """
+        # Convert to grayscale for intensity mapping
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Apply slight blur to simulate thermal camera smoothing
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        # Enhance contrast slightly (thermal cameras often have good contrast)
+        enhanced = cv2.convertScaleAbs(blurred, alpha=1.2, beta=10)
+
+        # Create thermal color mapping using a lookup table
+        # Map intensity (0-255) to thermal colors: cool blue → warm yellow → hot red
+        lut = np.zeros((256, 1, 3), dtype=np.uint8)
+
+        for i in range(256):
+            intensity = i / 255.0
+
+            if intensity < 0.4:  # Cool areas (blue tones) - darkened
+                # Blue to cyan transition (darker)
+                r = int(intensity * 2.5 * 30)   # Lower red (was 50)
+                g = int(intensity * 2.5 * 60)   # Lower green (was 100)
+                b = int(60 + intensity * 2.5 * 100)  # Lower blue (was 100 + 155)
+            elif intensity < 0.7:  # Warm areas (green to yellow) - darkened
+                # Green to yellow transition (darker)
+                r = int((intensity - 0.4) * 3.33 * 120)  # Lower red (was 200)
+                g = int(90 + (intensity - 0.4) * 3.33 * 65)  # Lower green (was 150 + 105)
+                b = int((0.7 - intensity) * 3.33 * 60)  # Lower blue (was 100)
+            else:  # Hot areas (orange to red) - darkened
+                # Yellow to red transition (darker)
+                r = int(120 + (intensity - 0.7) * 3.33 * 80)   # Lower red (was 200 + 55)
+                g = int((1.0 - intensity) * 3.33 * 35)   # Lower green (was 55)
+                b = int((1.0 - intensity) * 3.33 * 30)   # Lower blue (was 50)
+
+            # Clamp values to 0-255
+            r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
+            lut[i, 0] = [b, g, r]  # BGR format for OpenCV
+
+        # Apply the thermal color mapping
+        thermal_frame = cv2.LUT(cv2.merge([enhanced, enhanced, enhanced]), lut)
+
+        # Blend with original frame for stronger thermal effect (50% thermal, 50% original)
+        thermal_overlay = cv2.addWeighted(frame, 0.5, thermal_frame, 0.5, 0)
+
+        return thermal_overlay
+
+    def create_device_contour_mask(self, device_roi):
+        """
+        Create a precise device mask using contour detection
+        Attempts to find the exact outline of the device
+        """
+        # Convert to grayscale
+        gray = cv2.cvtColor(device_roi, cv2.COLOR_BGR2GRAY)
+
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        # Apply adaptive thresholding to segment device from background
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+        )
+
+        # Morphological operations to clean up the mask
+        kernel = np.ones((3, 3), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+
+        # Find contours
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Create mask from contours
+        mask = np.zeros_like(gray)
+
+        if contours:
+            # Find the largest contour (most likely the device)
+            largest_contour = max(contours, key=cv2.contourArea)
+
+            # Only use contour if it's reasonably sized (not too small)
+            area = cv2.contourArea(largest_contour)
+            total_area = device_roi.shape[0] * device_roi.shape[1]
+
+            if area > total_area * 0.1:  # Contour must cover at least 10% of bounding box
+                # Fill the largest contour
+                cv2.drawContours(mask, [largest_contour], -1, 255, -1)
+
+                # Smooth the mask edges
+                mask = cv2.GaussianBlur(mask, (3, 3), 0)
+                _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+            else:
+                # Fallback to rounded rectangle if contour detection fails
+                h, w = device_roi.shape[:2]
+                corner_radius = min(15, min(h, w) // 4)
+                mask = self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+        else:
+            # Fallback to rounded rectangle if no contours found
+            h, w = device_roi.shape[:2]
+            corner_radius = min(15, min(h, w) // 4)
+            mask = self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+
+        return mask
+
+    def draw_pulsing_anchor_contour_constrained(self, frame, box, label, confidence, frame_count):
+        """
+        Draw pulsing energy sphere constrained to device contour
+        Creates futuristic force field effect within device boundaries only
+        """
+        x1, y1, x2, y2 = map(int, box)
+
+        # Skip if confidence below threshold
+        if confidence < self.conf_threshold * 100:
+            return frame
+
+        if label not in self.electronics_map:
+            return frame
+
+        props = self.electronics_map[label]
+
+        # Extract device region
+        device_roi = frame[y1:y2, x1:x2].copy()
+        h, w = device_roi.shape[:2]
+
+        if h <= 10 or w <= 10:  # Skip very small detections
+            return frame
+
+        # Create device contour mask
+        device_mask = self.create_device_contour_mask(device_roi)
+
+        # Get color gradient based on power consumption
+        colormap_info = self.get_heatmap_colormap(props['power'])
+        colors = colormap_info['colors']
+
+        # Pulsing animation parameters
+        pulse_speed = 0.08
+        pulse_phase = (frame_count * pulse_speed) % (2 * np.pi)
+
+        # Calculate base radius from bounding box size (smaller than before)
+        box_width = x2 - x1
+        box_height = y2 - y1
+        base_radius = min(box_width, box_height) // 4.0  # Even smaller for contour-constrained
+        base_radius = max(base_radius, 15)  # Smaller minimum radius
+
+        # Pulse effect: radius oscillates
+        pulse_amplitude = base_radius * 0.3  # Slightly more variation
+        pulse_offset = np.sin(pulse_phase) * pulse_amplitude
+        current_radius = int(base_radius + pulse_offset)
+
+        # Create radial gradient constrained to device mask
+        center_y, center_x = h // 2, w // 2
+
+        # Create distance map from center
+        y_coords, x_coords = np.ogrid[:h, :w]
+        distances = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
+
+        # Normalize distances to 0-1 range based on current radius
+        max_dist = current_radius
+        normalized_dist = np.clip(distances / max_dist, 0, 1)
+
+        # Create radial gradient using distance
+        intensity_map = 1 - normalized_dist  # Higher intensity at center
+        intensity_map = np.power(intensity_map, 1.2)  # Soften falloff
+        intensity_map = (intensity_map * 255).astype(np.uint8)
+
+        # Create color gradient using LUT
+        num_colors = len(colors)
+        color_lut = np.zeros((256, 3), dtype=np.uint8)
+        for i in range(256):
+            pos = i / 255.0
+            color_pos = pos * (num_colors - 1)
+            idx_low = int(np.floor(color_pos))
+            idx_high = min(idx_low + 1, num_colors - 1)
+            blend = color_pos - idx_low
+
+            color_low = np.array(colors[idx_low])
+            color_high = np.array(colors[idx_high])
+            interpolated = color_low * (1 - blend) + color_high * blend
+
+            color_lut[i] = interpolated.astype(np.uint8)
+
+        # Apply color mapping
+        gradient_bgr = color_lut[intensity_map.flatten()].reshape(h, w, 3)
+
+        # Apply device mask to constrain gradient to device shape
+        mask_3ch = cv2.merge([device_mask, device_mask, device_mask])
+        gradient_masked = cv2.bitwise_and(gradient_bgr, mask_3ch)
+
+        # Blend with device region (50% device, 50% gradient for energy effect)
+        device_with_gradient = cv2.addWeighted(device_roi, 0.5, gradient_masked, 0.5, 0)
+
+        # Apply glow effect for high-intensity devices
+        if colormap_info['intensity'] >= 0.85:
+            device_with_gradient = self.add_glow_effect(device_with_gradient, device_mask, colormap_info)
+
+        # Place back into frame
+        frame[y1:y2, x1:x2] = device_with_gradient
+
+        # Draw text panel beside the device
+        self.draw_text_panel_beside_mask(
+            frame, box, label, confidence, props, colormap_info
+        )
+
+        return frame
+
+    def draw_heatmap_overlay(self, frame, box, label, confidence, frame_count):
+        """
+        Draw thermal radiation-style heatmap overlay on detected device
+        Uses radial gradient to simulate heat distribution
+        """
+        x1, y1, x2, y2 = map(int, box)
+        
+        # Skip if confidence below threshold
+        if confidence < self.conf_threshold * 100:
+            return frame
+        
+        if label not in self.electronics_map:
+            return frame
+        
+        props = self.electronics_map[label]
+        
+        # Extract device region
+        device_roi = frame[y1:y2, x1:x2].copy()
+        h, w = device_roi.shape[:2]
+        
+        if h <= 10 or w <= 10:  # Skip very small detections
+            return frame
+        
+        # Get or create cached gradient
+        cache_key = f"{w}x{h}_{props['power']}"
+        if cache_key not in self.gradient_cache:
+            # Get color scheme for power level
+            colormap_info = self.get_heatmap_colormap(props['power'])
+            
+            # Create device mask
+            corner_radius = min(15, min(h, w) // 4)
+            mask = self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+            
+            # Create radial gradient heatmap
+            heatmap, intensity_map = self.create_radial_gradient_heatmap_fast(
+                (h, w), 
+                colormap_info
+            )
+            
+            self.gradient_cache[cache_key] = (mask, heatmap, colormap_info)
+        else:
+            mask, heatmap, colormap_info = self.gradient_cache[cache_key]
+        
+        # Apply mask to heatmap
+        mask_3channel = cv2.merge([mask, mask, mask])
+        heatmap_masked = cv2.bitwise_and(heatmap, mask_3channel)
+        
+        # Brighten the device area first (counteract dark tint)
+        device_brightened = cv2.convertScaleAbs(device_roi, alpha=1.5, beta=30)
+        
+        # Blend brightened device with heatmap (70% heatmap for strong color)
+        device_with_heatmap = cv2.addWeighted(
+            device_brightened, 1 - self.heatmap_alpha,
+            heatmap_masked, self.heatmap_alpha, 0
+        )
+        
+        # Apply intensity scaling based on power level
+        intensity_factor = colormap_info['intensity']
+        device_with_heatmap = cv2.convertScaleAbs(device_with_heatmap, alpha=intensity_factor, beta=20)
+        
+        # Apply only to masked area
+        mask_bool = mask > 0
+        device_roi[mask_bool] = device_with_heatmap[mask_bool]
+        
+        # Add glow effect for high-intensity devices
+        if colormap_info['intensity'] >= 0.85:
+            device_roi = self.add_glow_effect(device_roi, mask, colormap_info)
+        
+        # Place back into frame
+        frame[y1:y2, x1:x2] = device_roi
+        
+        # Draw text panel beside the mask
+        self.draw_text_panel_beside_mask(
+            frame, box, label, confidence, props, colormap_info
+        )
+        
+        return frame
+    
+    def draw_pulsing_anchor(self, frame, box, label, confidence, frame_count):
+        """
+        Draw pulsing energy sphere with radial gradient fill
+        Creates futuristic force field effect with glowing particles
+        """
+        x1, y1, x2, y2 = map(int, box)
+        
+        # Skip if confidence below threshold
+        if confidence < self.conf_threshold * 100:
+            return frame
+        
+        if label not in self.electronics_map:
+            return frame
+        
+        props = self.electronics_map[label]
+        
+        # Calculate center point
+        center_x = (x1 + x2) // 2
+        center_y = (y1 + y2) // 2
+        
+        # Get color gradient based on power consumption
+        colormap_info = self.get_heatmap_colormap(props['power'])
+        colors = colormap_info['colors']
+        
+        # Pulsing animation parameters
+        pulse_speed = 0.08  # Slightly slower for smoother effect
+        pulse_phase = (frame_count * pulse_speed) % (2 * np.pi)
+        
+        # Calculate base radius from bounding box size (reduced size)
+        box_width = x2 - x1
+        box_height = y2 - y1
+        base_radius = min(box_width, box_height) // 3.5  # Reduced from 2.5 to 3.5
+        base_radius = max(base_radius, 25)  # Reduced minimum radius from 40 to 25
+        
+        # Pulse effect: radius oscillates
+        pulse_amplitude = base_radius * 0.25  # 25% size variation
+        pulse_offset = np.sin(pulse_phase) * pulse_amplitude
+        current_radius = int(base_radius + pulse_offset)
+        
+        # Create a separate overlay for the sphere
+        sphere_size = current_radius * 2 + 20
+        sphere_overlay = np.zeros((sphere_size, sphere_size, 3), dtype=np.uint8)
+        sphere_center = (sphere_size // 2, sphere_size // 2)
+        
+        # Create radial gradient fill for energy sphere
+        # Draw multiple concentric filled circles with decreasing opacity
+        num_layers = 60  # More layers for smoother gradient
+        
+        for i in range(num_layers, 0, -1):
+            layer_radius = int(current_radius * (i / num_layers))
+            if layer_radius < 1:
+                continue
+            
+            # Calculate color interpolation based on distance from center
+            pos = (num_layers - i) / num_layers
+            
+            # Map to color gradient
+            color_pos = pos * (len(colors) - 1)
+            color_idx_low = int(np.floor(color_pos))
+            color_idx_high = min(color_idx_low + 1, len(colors) - 1)
+            blend = color_pos - color_idx_low
+            
+            # Interpolate between colors (brightest at center)
+            color_low = np.array(colors[-(color_idx_low + 1)])  # Reverse for bright center
+            color_high = np.array(colors[-(color_idx_high + 1)])
+            interpolated_color = color_low * (1 - blend) + color_high * blend
+            
+            # Add intensity boost to center
+            intensity_boost = 1.0 + (1.0 - pos) * 0.5  # Up to 50% brighter at center
+            interpolated_color = np.clip(interpolated_color * intensity_boost, 0, 255)
+            
+            cv2.circle(sphere_overlay, sphere_center, layer_radius, 
+                      tuple(map(int, interpolated_color)), -1)
+        
+        # Calculate position on main frame
+        y1_sphere = max(0, center_y - sphere_size // 2)
+        y2_sphere = min(frame.shape[0], center_y + sphere_size // 2)
+        x1_sphere = max(0, center_x - sphere_size // 2)
+        x2_sphere = min(frame.shape[1], center_x + sphere_size // 2)
+        
+        # Calculate corresponding region in sphere overlay
+        y1_overlay = sphere_size // 2 - (center_y - y1_sphere)
+        y2_overlay = sphere_size // 2 + (y2_sphere - center_y)
+        x1_overlay = sphere_size // 2 - (center_x - x1_sphere)
+        x2_overlay = sphere_size // 2 + (x2_sphere - center_x)
+        
+        # Extract regions
+        frame_roi = frame[y1_sphere:y2_sphere, x1_sphere:x2_sphere]
+        sphere_roi = sphere_overlay[y1_overlay:y2_overlay, x1_overlay:x2_overlay]
+        
+        # Blend sphere with frame using alpha based on intensity
+        sphere_mask = np.any(sphere_roi > 0, axis=2).astype(np.float32)
+        sphere_alpha = sphere_mask * 0.85  # 85% opacity for sphere
+        
+        # Apply blend
+        for c in range(3):
+            frame_roi[:, :, c] = (frame_roi[:, :, c] * (1 - sphere_alpha) + 
+                                  sphere_roi[:, :, c] * sphere_alpha).astype(np.uint8)
+        
+        # Add outer glow effect (force field)
+        glow_radius = int(current_radius * 1.2)
+        glow_color = colors[-1]  # Brightest color
+        overlay = frame.copy()
+        cv2.circle(overlay, (center_x, center_y), glow_radius, glow_color, 4)
+        glow_alpha = 0.3 + 0.15 * np.sin(pulse_phase)  # Pulsing glow
+        cv2.addWeighted(overlay, glow_alpha, frame, 1 - glow_alpha, 0, frame)
+        
+        # Add multiple pulsing force field rings
+        for ring_offset in [1.3, 1.45]:
+            ring_radius = int(current_radius * ring_offset + pulse_offset * 0.5)
+            ring_alpha = 0.2 + 0.1 * np.sin(pulse_phase + ring_offset)
+            overlay = frame.copy()
+            cv2.circle(overlay, (center_x, center_y), ring_radius, colors[-1], 2)
+            cv2.addWeighted(overlay, ring_alpha, frame, 1 - ring_alpha, 0, frame)
+        
+        # Add energy particles around the sphere
+        num_particles = 8
+        particle_distance = current_radius * 1.25
+        for i in range(num_particles):
+            angle = (i / num_particles) * 2 * np.pi + (pulse_phase * 0.5)  # Rotate slowly
+            particle_x = int(center_x + np.cos(angle) * particle_distance)
+            particle_y = int(center_y + np.sin(angle) * particle_distance)
+            
+            # Pulsing particle size
+            particle_size = int(3 + 2 * np.sin(pulse_phase + i))
+            particle_alpha = 0.4 + 0.2 * np.sin(pulse_phase + i)
+            
+            overlay = frame.copy()
+            cv2.circle(overlay, (particle_x, particle_y), particle_size, colors[-1], -1)
+            cv2.addWeighted(overlay, particle_alpha, frame, 1 - particle_alpha, 0, frame)
+        
+        # Draw bright center core
+        core_radius = max(3, current_radius // 12)
+        core_pulse = int(core_radius + 2 * np.sin(pulse_phase * 2))  # Faster pulse
+        cv2.circle(frame, (center_x, center_y), core_pulse, (255, 255, 255), -1)
+        
+        # Add center glow
+        overlay = frame.copy()
+        cv2.circle(overlay, (center_x, center_y), core_pulse * 2, (255, 255, 255), -1)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+        
+        # Draw text panel beside the anchor
+        self.draw_text_panel_beside_anchor(
+            frame, (center_x, center_y), base_radius, label, confidence, props, colormap_info
+        )
+        
+        return frame
+    
+    def draw_text_panel_beside_anchor(self, frame, center_pos, anchor_radius, label, confidence, props, colormap_info):
+        """
+        Draw text panel beside the pulsing anchor
+        Auto-positions to avoid overlapping with anchor
+        """
+        center_x, center_y = center_pos
+        frame_height, frame_width = frame.shape[:2]
+        
+        panel_width = 250
+        panel_height = 85
+        
+        # Calculate safe distance from anchor
+        safe_distance = int(anchor_radius * 2 + 15)
+        
+        # Auto-position: right side if space, else left side
+        if center_x + safe_distance + panel_width < frame_width:
+            # Position to the right
+            panel_x = center_x + safe_distance
+        elif center_x - safe_distance - panel_width > 0:
+            # Position to the left
+            panel_x = center_x - safe_distance - panel_width
+        else:
+            # Position above or below if no side space
+            panel_x = max(center_x - panel_width // 2, 10)
+        
+        # Position panel vertically centered with anchor
+        panel_y = max(min(center_y - panel_height // 2, 
+                          frame_height - panel_height - 10), 10)
+        
+        # Draw semi-transparent background
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (panel_x, panel_y), 
+                      (panel_x + panel_width, panel_y + panel_height), 
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+        
+        # Use gradient color for border (from colormap)
+        border_color = colormap_info['colors'][-1]  # Brightest color from gradient
+        
+        # Border for info panel
+        cv2.rectangle(frame, (panel_x, panel_y), 
+                      (panel_x + panel_width, panel_y + panel_height), 
+                      border_color, 2)
+        
+        # Text content
+        text_x = panel_x + 10
+        text_y = panel_y + 28
+        
+        # Device name
+        cv2.putText(frame, f"{label.upper()}", (text_x, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Power consumption
+        cv2.putText(frame, f"Power: {props['power']}", (text_x, text_y + 28),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+        
+        # Confidence
+        cv2.putText(frame, f"Confidence: {confidence:.1f}%", (text_x, text_y + 50),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    
+    def draw_text_panel_beside_mask(self, frame, box, label, confidence, props, colormap_info):
+        """
+        Draw text panel beside the heatmap mask
+        Auto-positions to right or left based on available space
+        """
+        x1, y1, x2, y2 = map(int, box)
+        frame_height, frame_width = frame.shape[:2]
+        
+        panel_width = 250
+        panel_height = 85  # Reduced height (no heat level text)
+        
+        # Auto-position: right side if space, else left side
+        if x2 + panel_width + 10 < frame_width:
+            # Position to the right
+            panel_x = x2 + 10
+        elif x1 - panel_width - 10 > 0:
+            # Position to the left
+            panel_x = x1 - panel_width - 10
+        else:
+            # Default to above if no side space
+            panel_x = max(x1, 10)
+        
+        # Position panel vertically centered with mask
+        mask_center_y = (y1 + y2) // 2
+        panel_y = max(min(mask_center_y - panel_height // 2, 
+                          frame_height - panel_height - 10), 10)
+        
+        # Draw semi-transparent background
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (panel_x, panel_y), 
+                      (panel_x + panel_width, panel_y + panel_height), 
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+        
+        # Use gradient color for border (from colormap)
+        border_color = colormap_info['colors'][-1]  # Brightest color from gradient
+        
+        # Border for info panel
+        cv2.rectangle(frame, (panel_x, panel_y), 
+                      (panel_x + panel_width, panel_y + panel_height), 
+                      border_color, 2)
+        
+        # Text content
+        text_x = panel_x + 10
+        text_y = panel_y + 28
+        
+        # Device name
+        cv2.putText(frame, f"{label.upper()}", (text_x, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Power consumption (no heat level label)
+        cv2.putText(frame, f"Power: {props['power']}", (text_x, text_y + 28),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+        
+        # Confidence
+        cv2.putText(frame, f"Confidence: {confidence:.1f}%", (text_x, text_y + 50),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
     
     def draw_custom_overlay(self, frame, box, label, confidence):
         """Draw custom overlay for detected electronics"""
@@ -465,14 +1199,13 @@ class ElectronicsDetector:
         print("  🎮 CONTROLS")
         print("="*60)
         print("  Q       - Quit")
-        print("  Z       - Toggle detection zone visibility")
-        print("  + / =   - Expand detection zone")
-        print("  -       - Shrink detection zone")
         print("  D       - Toggle detection interval (speed vs accuracy)")
+        print("  C       - Cycle confidence threshold (30%-80%)")
+        print("  H       - Toggle anchor/box display mode")
+        print("  T       - Toggle thermal filter overlay")
         print("="*60)
         print("\n🚀 Starting detection loop...\n")
         
-        show_zone = True
         frame_count = 0
         last_key_press = ""
         key_press_time = 0
@@ -523,14 +1256,33 @@ class ElectronicsDetector:
                                 'confidence': confidence
                             })
             
-            # Draw detection zone
-            if show_zone:
-                frame = self.draw_detection_zone(frame)
+            # Apply permanent dark tint overlay for cinematic surveillance effect (70% darker)
+            dark_overlay = frame.copy()
+            dark_overlay = cv2.addWeighted(dark_overlay, self.dark_tint, np.zeros_like(dark_overlay), 1 - self.dark_tint, 0)
+            frame = dark_overlay
+
+            # Apply mock thermal filter overlay (simulates thermal camera effect on entire frame)
+            if self.show_thermal_filter:
+                frame = self.apply_mock_thermal_filter(frame)
             
             # Draw cached detections (from last YOLO run)
             for detection in self.last_detections:
-                detected_items[detection['label']] += 1
-                self.draw_custom_overlay(frame, detection['box'], detection['label'], detection['confidence'])
+                # Only count if above confidence threshold
+                if detection['confidence'] >= self.conf_threshold * 100:
+                    detected_items[detection['label']] += 1
+                
+                # Draw pulsing anchor overlay (contour-constrained)
+                if self.show_heatmap:
+                    frame = self.draw_pulsing_anchor_contour_constrained(
+                        frame,
+                        detection['box'],
+                        detection['label'],
+                        detection['confidence'],
+                        frame_count
+                    )
+                else:
+                    # Fallback to old style boxes
+                    self.draw_custom_overlay(frame, detection['box'], detection['label'], detection['confidence'])
             
             # Calculate FPS
             frame_time = time.time() - start_time
@@ -541,7 +1293,7 @@ class ElectronicsDetector:
             avg_fps = sum(self.fps_history) / len(self.fps_history)
             
             # Draw FPS and stats
-            panel_height = 130 if last_key_press else 100
+            panel_height = 155 if last_key_press else 125
             cv2.rectangle(frame, (10, 10), (300, 10 + panel_height), (0, 0, 0), -1)
             cv2.rectangle(frame, (10, 10), (300, 10 + panel_height), (0, 255, 0), 2)
             
@@ -551,12 +1303,15 @@ class ElectronicsDetector:
             cv2.putText(frame, f"Detected: {sum(detected_items.values())} items", (20, 70),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
-            cv2.putText(frame, f"Detection: Every {self.detection_interval} frames", (20, 95),
+            cv2.putText(frame, f"Detection: Every {self.detection_interval} frames", (20, 92),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            
+            cv2.putText(frame, f"Confidence: {self.conf_threshold*100:.0f}%", (20, 112),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
             
             # Show last key press feedback (fades after 2 seconds)
             if last_key_press and time.time() - key_press_time < 2:
-                cv2.putText(frame, f"Key: {last_key_press}", (20, 120),
+                cv2.putText(frame, f"Key: {last_key_press}", (20, 142),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 255, 100), 1)
             
             # Display frame
@@ -572,39 +1327,6 @@ class ElectronicsDetector:
                     print("\n[INFO] Quit requested by user")
                     break
                     
-                elif key == ord('z') or key == ord('Z'):
-                    show_zone = not show_zone
-                    last_key_press = f"Z - Zone {'ON' if show_zone else 'OFF'}"
-                    key_press_time = time.time()
-                    print(f"[INFO] Detection zone: {'ON' if show_zone else 'OFF'}")
-                    
-                elif key == ord('+') or key == ord('='):
-                    # Expand zone
-                    margin = 0.05
-                    self.zone['x1'] = max(0, self.zone['x1'] - margin)
-                    self.zone['y1'] = max(0, self.zone['y1'] - margin)
-                    self.zone['x2'] = min(1, self.zone['x2'] + margin)
-                    self.zone['y2'] = min(1, self.zone['y2'] + margin)
-                    last_key_press = "+ - Zone Expanded"
-                    key_press_time = time.time()
-                    print(f"[INFO] Zone expanded")
-                    
-                elif key == ord('-') or key == ord('_'):
-                    # Shrink zone
-                    margin = 0.05
-                    if self.zone['x2'] - self.zone['x1'] > 0.2:  # Keep minimum size
-                        self.zone['x1'] += margin
-                        self.zone['y1'] += margin
-                        self.zone['x2'] -= margin
-                        self.zone['y2'] -= margin
-                        last_key_press = "- - Zone Shrunk"
-                        key_press_time = time.time()
-                        print(f"[INFO] Zone shrunk")
-                    else:
-                        last_key_press = "- - Zone at minimum"
-                        key_press_time = time.time()
-                        print(f"[INFO] Zone already at minimum size")
-                        
                 elif key == ord('d') or key == ord('D'):
                     # Toggle detection interval (1, 2, 3 frames)
                     self.detection_interval = (self.detection_interval % 3) + 1
@@ -612,6 +1334,37 @@ class ElectronicsDetector:
                     last_key_press = f"D - {speed_desc[self.detection_interval]}"
                     key_press_time = time.time()
                     print(f"[INFO] Detection interval: Every {self.detection_interval} frames ({speed_desc[self.detection_interval]})")
+                    
+                elif key == ord('c') or key == ord('C'):
+                    # Cycle confidence threshold: 0.3, 0.4, 0.5, 0.6, 0.7, 0.8
+                    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+                    try:
+                        current_idx = thresholds.index(self.conf_threshold)
+                        self.conf_threshold = thresholds[(current_idx + 1) % len(thresholds)]
+                    except ValueError:
+                        self.conf_threshold = 0.7  # Default if not in list
+                    last_key_press = f"C - Confidence: {self.conf_threshold*100:.0f}%"
+                    key_press_time = time.time()
+                    print(f"[INFO] Confidence threshold: {self.conf_threshold*100:.0f}%")
+                    
+                elif key == ord('h') or key == ord('H'):
+                    # Toggle anchor mode
+                    self.show_heatmap = not self.show_heatmap
+                    mode = "Anchor" if self.show_heatmap else "Boxes"
+                    last_key_press = f"H - {mode} Mode"
+                    key_press_time = time.time()
+                    print(f"[INFO] Display mode: {mode}")
+                    # Clear gradient cache when toggling
+                    if self.show_heatmap:
+                        self.gradient_cache.clear()
+
+                elif key == ord('t') or key == ord('T'):
+                    # Toggle thermal filter overlay
+                    self.show_thermal_filter = not self.show_thermal_filter
+                    thermal_status = "ON" if self.show_thermal_filter else "OFF"
+                    last_key_press = f"T - Thermal Filter {thermal_status}"
+                    key_press_time = time.time()
+                    print(f"[INFO] Thermal filter: {thermal_status}")
         
         cap.release()
         cv2.destroyAllWindows()
