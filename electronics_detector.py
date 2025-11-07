@@ -13,6 +13,7 @@ import time
 from collections import defaultdict
 import os
 
+yolo_model_name = 'yolov11n-seg'
 class SystemChecker:
     """Pre-flight system checks before running detector"""
     
@@ -217,14 +218,14 @@ class SystemChecker:
         """Check if YOLO model exists"""
         self.print_header("YOLO Model Check")
         
-        model_path = 'yolov8n.pt'
+        model_path = f"{yolo_model_name}.pt"
         if os.path.exists(model_path):
             size_mb = os.path.getsize(model_path) / (1024 * 1024)
             self.print_check("Model File", True, f"{model_path} ({size_mb:.1f}MB)")
             return True
         else:
             self.print_check("Model File", False, "Will download on first run (~6MB)")
-            self.warnings.append("YOLOv8n model will be downloaded automatically")
+            self.warnings.append("YOLOv model will be downloaded automatically")
             return True  # Not a critical issue
     
     def run_all_checks(self):
@@ -301,7 +302,7 @@ class ElectronicsDetector:
         # Load YOLOv8 model (will auto-download on first run)
         print("  Loading YOLO model...")
         try:
-            self.model = YOLO('yolov8n-seg.pt')  # Nano segmentation model for precise masks
+            self.model = YOLO(f"{yolo_model_name}.pt")  # Nano segmentation model for precise masks
             print("  ✓ YOLO model loaded successfully")
         except Exception as e:
             print(f"  ✗ Failed to load YOLO model: {e}")
@@ -646,27 +647,55 @@ class ElectronicsDetector:
             corner_radius = min(15, min(h, w) // 4)
             return self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
         
-        # Resize segmentation mask to match device ROI size with high quality
-        mask_resized = cv2.resize(seg_mask, (w, h), interpolation=cv2.INTER_CUBIC)
+        # YOLO segmentation mask is in full frame resolution
+        # First crop to bounding box region, then resize if needed
+        mask_h, mask_w = seg_mask.shape
         
-        # Convert to binary mask with higher threshold for tighter fit (0.6 instead of 0.5)
-        _, binary_mask = cv2.threshold(mask_resized, 0.6, 255, cv2.THRESH_BINARY)
+        # Crop mask to bounding box region (with bounds checking)
+        y1_crop = max(0, min(y1, mask_h))
+        y2_crop = max(0, min(y2, mask_h))
+        x1_crop = max(0, min(x1, mask_w))
+        x2_crop = max(0, min(x2, mask_w))
+        
+        # Validate crop region is not empty
+        if y2_crop <= y1_crop or x2_crop <= x1_crop:
+            # Invalid crop region, fall back to rounded rectangle
+            corner_radius = min(15, min(h, w) // 4)
+            return self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+        
+        cropped_mask = seg_mask[y1_crop:y2_crop, x1_crop:x2_crop]
+        
+        # Validate cropped mask is not empty
+        if cropped_mask.size == 0 or cropped_mask.shape[0] == 0 or cropped_mask.shape[1] == 0:
+            # Empty mask, fall back to rounded rectangle
+            corner_radius = min(15, min(h, w) // 4)
+            return self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+        
+        # Resize to exact box dimensions if needed
+        if cropped_mask.shape[0] != h or cropped_mask.shape[1] != w:
+            mask_resized = cv2.resize(cropped_mask, (w, h), interpolation=cv2.INTER_CUBIC)
+        else:
+            mask_resized = cropped_mask
+        
+        # Convert to binary mask with threshold for clean edges
+        _, binary_mask = cv2.threshold(mask_resized, 0.5, 255, cv2.THRESH_BINARY)
         binary_mask = binary_mask.astype(np.uint8)
         
         # Minimal morphological operations to preserve exact shape
-        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel_small, iterations=1)
         
-        # Very light smoothing to preserve edges
+        # Light smoothing to preserve edges while removing noise
         binary_mask = cv2.GaussianBlur(binary_mask, (3, 3), 0)
-        _, binary_mask = cv2.threshold(binary_mask, 200, 255, cv2.THRESH_BINARY)
+        _, binary_mask = cv2.threshold(binary_mask, 127, 255, cv2.THRESH_BINARY)
         
         return binary_mask
 
     def draw_pulsing_anchor_contour_constrained(self, frame, box, label, confidence, frame_count, seg_mask=None):
         """
-        Draw pulsing energy sphere constrained to device segmentation mask
-        Creates futuristic force field effect within device boundaries only
+        Enhance thermal camera filter to show device heat naturally
+        Modifies existing thermal intensity instead of adding artificial overlays
+        Device appears as a hot object within the thermal camera view
         """
         x1, y1, x2, y2 = map(int, box)
 
@@ -678,94 +707,152 @@ class ElectronicsDetector:
             return frame
 
         props = self.electronics_map[label]
-
-        # Extract device region
-        device_roi = frame[y1:y2, x1:x2].copy()
-        h, w = device_roi.shape[:2]
-
-        if h <= 10 or w <= 10:  # Skip very small detections
-            return frame
-
-        # Extract segmentation mask (from YOLO or fallback)
-        device_mask = self.extract_segmentation_mask(seg_mask, box)
-
-        # Get color gradient based on power consumption
-        colormap_info = self.get_heatmap_colormap(props['power'])
-        colors = colormap_info['colors']
-
-        # Pulsing animation parameters
-        pulse_speed = 0.08
-        pulse_phase = (frame_count * pulse_speed) % (2 * np.pi)
-
-        # Calculate base radius from bounding box size (smaller than before)
-        box_width = x2 - x1
-        box_height = y2 - y1
-        base_radius = min(box_width, box_height) // 4.0  # Even smaller for contour-constrained
-        base_radius = max(base_radius, 15)  # Smaller minimum radius
-
-        # Pulse effect: radius oscillates
-        pulse_amplitude = base_radius * 0.3  # Slightly more variation
-        pulse_offset = np.sin(pulse_phase) * pulse_amplitude
-        current_radius = int(base_radius + pulse_offset)
-
-        # Create radial gradient constrained to device mask
-        center_y, center_x = h // 2, w // 2
-
-        # Create distance map from center
-        y_coords, x_coords = np.ogrid[:h, :w]
-        distances = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
-
-        # Normalize distances to 0-1 range based on current radius
-        max_dist = current_radius
-        normalized_dist = np.clip(distances / max_dist, 0, 1)
-
-        # Create radial gradient using distance
-        intensity_map = 1 - normalized_dist  # Higher intensity at center
-        intensity_map = np.power(intensity_map, 1.2)  # Soften falloff
-        intensity_map = (intensity_map * 255).astype(np.uint8)
-
-        # Create color gradient using LUT
-        num_colors = len(colors)
-        color_lut = np.zeros((256, 3), dtype=np.uint8)
-        for i in range(256):
-            pos = i / 255.0
-            color_pos = pos * (num_colors - 1)
-            idx_low = int(np.floor(color_pos))
-            idx_high = min(idx_low + 1, num_colors - 1)
-            blend = color_pos - idx_low
-
-            color_low = np.array(colors[idx_low])
-            color_high = np.array(colors[idx_high])
-            interpolated = color_low * (1 - blend) + color_high * blend
-
-            color_lut[i] = interpolated.astype(np.uint8)
-
-        # Apply color mapping
-        gradient_bgr = color_lut[intensity_map.flatten()].reshape(h, w, 3)
-
-        # Apply device mask to constrain gradient to device shape
-        mask_3ch = cv2.merge([device_mask, device_mask, device_mask])
-        gradient_masked = cv2.bitwise_and(gradient_bgr, mask_3ch)
-
-        # Blend gradient with device region only where mask exists
-        device_with_gradient = device_roi.copy()
-        mask_bool = device_mask > 0
         
-        # Blend only the masked pixels (50% device, 50% gradient for energy effect)
-        device_with_gradient[mask_bool] = cv2.addWeighted(
-            device_roi[mask_bool], 0.5, 
-            gradient_masked[mask_bool], 0.5, 0
-        )
-
-        # Apply glow effect for high-intensity devices
-        if colormap_info['intensity'] >= 0.85:
-            device_with_gradient = self.add_glow_effect(device_with_gradient, device_mask, colormap_info)
-
-        # Place back into frame ONLY the masked pixels (no black box)
-        mask_bool_3ch = mask_3ch > 0
-        frame[y1:y2, x1:x2][mask_bool_3ch] = device_with_gradient[mask_bool_3ch]
-
-        # Draw text panel beside the device
+        # Extract segmentation mask (full frame coordinates)
+        device_mask = self.extract_segmentation_mask(seg_mask, box)
+        
+        # Create full-frame heat mask
+        frame_h, frame_w = frame.shape[:2]
+        heat_mask = np.zeros((frame_h, frame_w), dtype=np.float32)
+        
+        # Place device mask in full frame coordinates with proper bounds checking
+        mask_h, mask_w = device_mask.shape
+        
+        # Calculate actual placement bounds
+        end_y = min(y1 + mask_h, frame_h)
+        end_x = min(x1 + mask_w, frame_w)
+        actual_h = end_y - y1
+        actual_w = end_x - x1
+        
+        # Only place mask if we have valid bounds
+        if actual_h > 0 and actual_w > 0:
+            # Crop mask to fit within frame bounds
+            cropped_mask = device_mask[:actual_h, :actual_w]
+            heat_mask[y1:end_y, x1:end_x] = cropped_mask / 255.0
+        
+        # Check if mask is valid
+        mask_coords = np.argwhere(heat_mask > 0)
+        if len(mask_coords) == 0:
+            return frame
+        
+        # Calculate device center for diffusion reference
+        center_y = int(np.mean(mask_coords[:, 0]))
+        center_x = int(np.mean(mask_coords[:, 1]))
+        
+        # Create heat intensity map
+        heat_intensity = np.zeros((frame_h, frame_w), dtype=np.float32)
+        
+        # === Make entire device uniformly hot ===
+        # Device interior: uniform high temperature (no gradient)
+        device_interior = heat_mask > 0
+        
+        # Power-based base temperature (entire device at this level)
+        power_multiplier = {
+            '0.5W': 0.7, '1-3W': 0.75, '1-5W': 0.8, '2-5W': 0.85,
+            '3-8W': 0.9, '5-8W': 0.92, '5-10W': 0.95, '8-15W': 0.97,
+            '15-30W': 1.0, '45-65W': 1.0, '800-1200W': 1.0
+        }
+        
+        base_temp = power_multiplier.get(props['power'], 0.9)
+        
+        # Subtle pulse effect (5% variation)
+        pulse = 1.0 + 0.05 * np.sin(frame_count * 0.08)
+        device_temp = base_temp * pulse
+        
+        # Set entire device to uniform high temperature
+        heat_intensity[device_interior] = device_temp
+        
+        # === Add subtle heat diffusion beyond device edges ===
+        # Create distance transform from device edges
+        device_mask_uint8 = (heat_mask * 255).astype(np.uint8)
+        
+        # Much smaller diffusion - just a subtle glow at edges
+        diffusion_size = {
+            '0.5W': 5, '1-3W': 8, '1-5W': 10, '2-5W': 12,
+            '3-8W': 15, '5-8W': 18, '5-10W': 20, '8-15W': 22,
+            '15-30W': 25, '45-65W': 30, '800-1200W': 35
+        }
+        
+        diffusion_radius = diffusion_size.get(props['power'], 15)
+        
+        # Calculate distance from device edge for smooth falloff
+        dist_from_device = cv2.distanceTransform(255 - device_mask_uint8, cv2.DIST_L2, 5)
+        
+        # Create very subtle falloff outside device (only very close to edges)
+        outside_device = (dist_from_device > 0) & (dist_from_device <= diffusion_radius) & (device_mask_uint8 == 0)
+        if np.any(outside_device):
+            # Much stronger falloff (power 3.5 instead of 2.0)
+            falloff = np.clip(1.0 - (dist_from_device / diffusion_radius), 0, 1)
+            falloff = np.power(falloff, 3.5)  # Very sharp falloff
+            # Much lower intensity outside device (20% instead of 60%)
+            heat_intensity[outside_device] = falloff[outside_device] * device_temp * 0.2
+        
+        # Ensure intensity is in valid range
+        heat_intensity = np.clip(heat_intensity, 0, 1)
+        
+        # === Modify existing frame thermal intensity ===
+        # Convert frame to grayscale for intensity manipulation
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Boost intensity in hot areas
+        boosted_gray = gray.astype(np.float32) + (heat_intensity * 80)  # Add heat
+        boosted_gray = np.clip(boosted_gray, 0, 255).astype(np.uint8)
+        
+        # Apply thermal color mapping to boosted areas only
+        # Use the existing thermal filter logic but with modified intensity
+        enhanced = cv2.bilateralFilter(boosted_gray, 9, 75, 75)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        enhanced = clahe.apply(enhanced)
+        enhanced = cv2.convertScaleAbs(enhanced, alpha=1.3, beta=10)
+        
+        # Create thermal LUT (same as apply_mock_thermal_filter)
+        lut = np.zeros((256, 1, 3), dtype=np.uint8)
+        for i in range(256):
+            intensity = i / 255.0
+            if intensity < 0.2:
+                t = intensity / 0.2
+                r = int(t * 20)
+                g = int(t * 15)
+                b = int(t * 120)
+            elif intensity < 0.4:
+                t = (intensity - 0.2) / 0.2
+                r = int(20 + t * 80)
+                g = int(15 + t * 25)
+                b = int(120 + t * 60)
+            elif intensity < 0.6:
+                t = (intensity - 0.4) / 0.2
+                r = int(100 + t * 120)
+                g = int(40 + t * 60)
+                b = int(180 - t * 150)
+            elif intensity < 0.8:
+                t = (intensity - 0.6) / 0.2
+                r = int(220 + t * 35)
+                g = int(100 + t * 130)
+                b = int(30 - t * 30)
+            else:
+                t = (intensity - 0.8) / 0.2
+                r = int(255)
+                g = int(230 + t * 25)
+                b = int(t * 200)
+            
+            r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
+            lut[i, 0] = [b, g, r]
+        
+        # Apply thermal colors to enhanced areas
+        thermal_enhanced = cv2.LUT(cv2.merge([enhanced, enhanced, enhanced]), lut)
+        
+        # Create blend mask (thermal effect only where heat is)
+        blend_mask = np.clip(heat_intensity * 2, 0, 1)  # Boost visibility
+        
+        # Blend thermal enhancement with original frame
+        for c in range(3):
+            frame[:, :, c] = (frame[:, :, c] * (1 - blend_mask) + 
+                              thermal_enhanced[:, :, c] * blend_mask).astype(np.uint8)
+        
+        # Get thermal color scheme for text panel
+        colormap_info = self.get_heatmap_colormap(props['power'])
+        
+        # Draw text panel
         self.draw_text_panel_beside_mask(
             frame, box, label, confidence, props, colormap_info
         )
