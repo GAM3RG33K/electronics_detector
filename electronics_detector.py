@@ -301,7 +301,7 @@ class ElectronicsDetector:
         # Load YOLOv8 model (will auto-download on first run)
         print("  Loading YOLO model...")
         try:
-            self.model = YOLO('yolov8n.pt')  # Nano model for speed
+            self.model = YOLO('yolov8n-seg.pt')  # Nano segmentation model for precise masks
             print("  ✓ YOLO model loaded successfully")
         except Exception as e:
             print(f"  ✗ Failed to load YOLO model: {e}")
@@ -370,10 +370,13 @@ class ElectronicsDetector:
         self.show_heatmap = True    # Toggle heatmap vs boxes
         self.show_thermal_filter = True  # Toggle mock thermal filter overlay on entire frame
         self.dark_tint = 0.3        # Background darkness level (0.3 = 70% darker) - PERMANENT
+        self.visualization_mode = 'anchor'  # 'anchor' (default pulsing) or 'mask' (segmentation)
         
         print("  ✓ Initialization complete!")
         print(f"  ⚡ Performance: Running detection every {self.detection_interval} frames for 60fps display")
-        print(f"  🎯 Pulsing Anchor Mode: Enabled (confidence threshold: {self.conf_threshold*100:.0f}%)\n")
+        print(f"  🎯 Visualization: Pulsing Anchor Mode (default)")
+        print(f"  🔍 Confidence threshold: {self.conf_threshold*100:.0f}%")
+        print(f"  💡 Press 'M' to toggle between Anchor and Segmentation Mask modes\n")
         
     def point_in_zone(self, x, y, frame_width, frame_height):
         """Check if a point is within the detection zone"""
@@ -564,40 +567,59 @@ class ElectronicsDetector:
 
     def apply_mock_thermal_filter(self, frame):
         """
-        Apply a mock thermal camera filter effect to the entire frame
-        Simulates the look of thermal imaging with warm color gradients
+        Apply an authentic thermal camera filter effect to the entire frame
+        Uses professional thermal imaging color scheme with enhanced contrast
         """
         # Convert to grayscale for intensity mapping
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Apply slight blur to simulate thermal camera smoothing
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Apply bilateral filter to preserve edges while smoothing
+        smoothed = cv2.bilateralFilter(gray, 9, 75, 75)
 
-        # Enhance contrast slightly (thermal cameras often have good contrast)
-        enhanced = cv2.convertScaleAbs(blurred, alpha=1.2, beta=10)
+        # Use CLAHE for enhanced local contrast (like real thermal cameras)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        enhanced = clahe.apply(smoothed)
 
-        # Create thermal color mapping using a lookup table
-        # Map intensity (0-255) to thermal colors: cool blue → warm yellow → hot red
+        # Further contrast boost
+        enhanced = cv2.convertScaleAbs(enhanced, alpha=1.3, beta=10)
+
+        # Create authentic thermal color mapping using a lookup table
+        # Professional thermal scheme: black → deep blue → purple → orange → yellow → white
         lut = np.zeros((256, 1, 3), dtype=np.uint8)
 
         for i in range(256):
             intensity = i / 255.0
 
-            if intensity < 0.4:  # Cool areas (blue tones) - darkened
-                # Blue to cyan transition (darker)
-                r = int(intensity * 2.5 * 30)   # Lower red (was 50)
-                g = int(intensity * 2.5 * 60)   # Lower green (was 100)
-                b = int(60 + intensity * 2.5 * 100)  # Lower blue (was 100 + 155)
-            elif intensity < 0.7:  # Warm areas (green to yellow) - darkened
-                # Green to yellow transition (darker)
-                r = int((intensity - 0.4) * 3.33 * 120)  # Lower red (was 200)
-                g = int(90 + (intensity - 0.4) * 3.33 * 65)  # Lower green (was 150 + 105)
-                b = int((0.7 - intensity) * 3.33 * 60)  # Lower blue (was 100)
-            else:  # Hot areas (orange to red) - darkened
-                # Yellow to red transition (darker)
-                r = int(120 + (intensity - 0.7) * 3.33 * 80)   # Lower red (was 200 + 55)
-                g = int((1.0 - intensity) * 3.33 * 35)   # Lower green (was 55)
-                b = int((1.0 - intensity) * 3.33 * 30)   # Lower blue (was 50)
+            if intensity < 0.2:  # Very cold (black to deep blue)
+                # Black to deep blue
+                t = intensity / 0.2
+                r = int(t * 20)
+                g = int(t * 15)
+                b = int(t * 120)
+            elif intensity < 0.4:  # Cold (deep blue to purple)
+                # Deep blue to purple
+                t = (intensity - 0.2) / 0.2
+                r = int(20 + t * 80)
+                g = int(15 + t * 25)
+                b = int(120 + t * 60)
+            elif intensity < 0.6:  # Moderate (purple to orange)
+                # Purple to orange transition
+                t = (intensity - 0.4) / 0.2
+                r = int(100 + t * 120)
+                g = int(40 + t * 60)
+                b = int(180 - t * 150)
+            elif intensity < 0.8:  # Warm (orange to yellow)
+                # Orange to yellow
+                t = (intensity - 0.6) / 0.2
+                r = int(220 + t * 35)
+                g = int(100 + t * 130)
+                b = int(30 - t * 30)
+            else:  # Hot (yellow to white)
+                # Yellow to white
+                t = (intensity - 0.8) / 0.2
+                r = int(255)
+                g = int(230 + t * 25)
+                b = int(t * 200)
 
             # Clamp values to 0-255
             r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
@@ -606,69 +628,44 @@ class ElectronicsDetector:
         # Apply the thermal color mapping
         thermal_frame = cv2.LUT(cv2.merge([enhanced, enhanced, enhanced]), lut)
 
-        # Blend with original frame for stronger thermal effect (50% thermal, 50% original)
-        thermal_overlay = cv2.addWeighted(frame, 0.5, thermal_frame, 0.5, 0)
+        # Blend with original frame for authentic thermal effect (65% thermal, 35% original)
+        thermal_overlay = cv2.addWeighted(frame, 0.35, thermal_frame, 0.65, 0)
 
         return thermal_overlay
 
-    def create_device_contour_mask(self, device_roi):
+    def extract_segmentation_mask(self, seg_mask, box):
         """
-        Create a precise device mask using contour detection
-        Attempts to find the exact outline of the device
+        Extract and process segmentation mask from YOLO results
+        Returns a clean binary mask for the detected device with precise boundaries
         """
-        # Convert to grayscale
-        gray = cv2.cvtColor(device_roi, cv2.COLOR_BGR2GRAY)
-
-        # Apply Gaussian blur to reduce noise
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Apply adaptive thresholding to segment device from background
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-        )
-
-        # Morphological operations to clean up the mask
-        kernel = np.ones((3, 3), np.uint8)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-
-        # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Create mask from contours
-        mask = np.zeros_like(gray)
-
-        if contours:
-            # Find the largest contour (most likely the device)
-            largest_contour = max(contours, key=cv2.contourArea)
-
-            # Only use contour if it's reasonably sized (not too small)
-            area = cv2.contourArea(largest_contour)
-            total_area = device_roi.shape[0] * device_roi.shape[1]
-
-            if area > total_area * 0.1:  # Contour must cover at least 10% of bounding box
-                # Fill the largest contour
-                cv2.drawContours(mask, [largest_contour], -1, 255, -1)
-
-                # Smooth the mask edges
-                mask = cv2.GaussianBlur(mask, (3, 3), 0)
-                _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-            else:
-                # Fallback to rounded rectangle if contour detection fails
-                h, w = device_roi.shape[:2]
-                corner_radius = min(15, min(h, w) // 4)
-                mask = self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
-        else:
-            # Fallback to rounded rectangle if no contours found
-            h, w = device_roi.shape[:2]
+        x1, y1, x2, y2 = map(int, box)
+        h, w = y2 - y1, x2 - x1
+        
+        if seg_mask is None or seg_mask.shape[0] == 0:
+            # Fallback to rounded rectangle if no segmentation available
             corner_radius = min(15, min(h, w) // 4)
-            mask = self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+            return self.create_rounded_rectangle_mask((h, w), corner_radius=corner_radius)
+        
+        # Resize segmentation mask to match device ROI size with high quality
+        mask_resized = cv2.resize(seg_mask, (w, h), interpolation=cv2.INTER_CUBIC)
+        
+        # Convert to binary mask with higher threshold for tighter fit (0.6 instead of 0.5)
+        _, binary_mask = cv2.threshold(mask_resized, 0.6, 255, cv2.THRESH_BINARY)
+        binary_mask = binary_mask.astype(np.uint8)
+        
+        # Minimal morphological operations to preserve exact shape
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel_small, iterations=1)
+        
+        # Very light smoothing to preserve edges
+        binary_mask = cv2.GaussianBlur(binary_mask, (3, 3), 0)
+        _, binary_mask = cv2.threshold(binary_mask, 200, 255, cv2.THRESH_BINARY)
+        
+        return binary_mask
 
-        return mask
-
-    def draw_pulsing_anchor_contour_constrained(self, frame, box, label, confidence, frame_count):
+    def draw_pulsing_anchor_contour_constrained(self, frame, box, label, confidence, frame_count, seg_mask=None):
         """
-        Draw pulsing energy sphere constrained to device contour
+        Draw pulsing energy sphere constrained to device segmentation mask
         Creates futuristic force field effect within device boundaries only
         """
         x1, y1, x2, y2 = map(int, box)
@@ -689,8 +686,8 @@ class ElectronicsDetector:
         if h <= 10 or w <= 10:  # Skip very small detections
             return frame
 
-        # Create device contour mask
-        device_mask = self.create_device_contour_mask(device_roi)
+        # Extract segmentation mask (from YOLO or fallback)
+        device_mask = self.extract_segmentation_mask(seg_mask, box)
 
         # Get color gradient based on power consumption
         colormap_info = self.get_heatmap_colormap(props['power'])
@@ -750,15 +747,23 @@ class ElectronicsDetector:
         mask_3ch = cv2.merge([device_mask, device_mask, device_mask])
         gradient_masked = cv2.bitwise_and(gradient_bgr, mask_3ch)
 
-        # Blend with device region (50% device, 50% gradient for energy effect)
-        device_with_gradient = cv2.addWeighted(device_roi, 0.5, gradient_masked, 0.5, 0)
+        # Blend gradient with device region only where mask exists
+        device_with_gradient = device_roi.copy()
+        mask_bool = device_mask > 0
+        
+        # Blend only the masked pixels (50% device, 50% gradient for energy effect)
+        device_with_gradient[mask_bool] = cv2.addWeighted(
+            device_roi[mask_bool], 0.5, 
+            gradient_masked[mask_bool], 0.5, 0
+        )
 
         # Apply glow effect for high-intensity devices
         if colormap_info['intensity'] >= 0.85:
             device_with_gradient = self.add_glow_effect(device_with_gradient, device_mask, colormap_info)
 
-        # Place back into frame
-        frame[y1:y2, x1:x2] = device_with_gradient
+        # Place back into frame ONLY the masked pixels (no black box)
+        mask_bool_3ch = mask_3ch > 0
+        frame[y1:y2, x1:x2][mask_bool_3ch] = device_with_gradient[mask_bool_3ch]
 
         # Draw text panel beside the device
         self.draw_text_panel_beside_mask(
@@ -1203,6 +1208,7 @@ class ElectronicsDetector:
         print("  C       - Cycle confidence threshold (30%-80%)")
         print("  H       - Toggle anchor/box display mode")
         print("  T       - Toggle thermal filter overlay")
+        print("  M       - Toggle visualization mode (anchor/mask)")
         print("="*60)
         print("\n🚀 Starting detection loop...\n")
         
@@ -1225,7 +1231,7 @@ class ElectronicsDetector:
             detected_items = defaultdict(int)
             
             if frame_count % self.detection_interval == 0:
-                # Run YOLO detection with lower confidence for better detection
+                # Run YOLO segmentation detection with lower confidence for better detection
                 results = self.model(frame, conf=0.3, verbose=False)
                 
                 # Cache detection results
@@ -1233,7 +1239,11 @@ class ElectronicsDetector:
                 
                 for result in results:
                     boxes = result.boxes
-                    for box in boxes:
+                    
+                    # Extract segmentation masks if available
+                    masks = result.masks if hasattr(result, 'masks') and result.masks is not None else None
+                    
+                    for idx, box in enumerate(boxes):
                         # Get box coordinates
                         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                         center_x = (x1 + x2) / 2
@@ -1248,12 +1258,18 @@ class ElectronicsDetector:
                         label = self.model.names[class_id]
                         confidence = float(box.conf[0]) * 100
                         
+                        # Extract segmentation mask for this detection
+                        seg_mask = None
+                        if masks is not None and idx < len(masks.data):
+                            seg_mask = masks.data[idx].cpu().numpy()
+                        
                         # Only cache electronics
                         if label in self.electronics_map:
                             self.last_detections.append({
                                 'box': [x1, y1, x2, y2],
                                 'label': label,
-                                'confidence': confidence
+                                'confidence': confidence,
+                                'mask': seg_mask
                             })
             
             # Apply permanent dark tint overlay for cinematic surveillance effect (70% darker)
@@ -1271,15 +1287,27 @@ class ElectronicsDetector:
                 if detection['confidence'] >= self.conf_threshold * 100:
                     detected_items[detection['label']] += 1
                 
-                # Draw pulsing anchor overlay (contour-constrained)
+                # Draw visualization based on mode
                 if self.show_heatmap:
-                    frame = self.draw_pulsing_anchor_contour_constrained(
-                        frame,
-                        detection['box'],
-                        detection['label'],
-                        detection['confidence'],
-                        frame_count
-                    )
+                    if self.visualization_mode == 'mask':
+                        # Segmentation mask mode (detailed)
+                        frame = self.draw_pulsing_anchor_contour_constrained(
+                            frame,
+                            detection['box'],
+                            detection['label'],
+                            detection['confidence'],
+                            frame_count,
+                            detection.get('mask', None)
+                        )
+                    else:
+                        # Pulsing anchor mode (default)
+                        frame = self.draw_pulsing_anchor(
+                            frame,
+                            detection['box'],
+                            detection['label'],
+                            detection['confidence'],
+                            frame_count
+                        )
                 else:
                     # Fallback to old style boxes
                     self.draw_custom_overlay(frame, detection['box'], detection['label'], detection['confidence'])
@@ -1293,7 +1321,7 @@ class ElectronicsDetector:
             avg_fps = sum(self.fps_history) / len(self.fps_history)
             
             # Draw FPS and stats
-            panel_height = 155 if last_key_press else 125
+            panel_height = 175 if last_key_press else 145
             cv2.rectangle(frame, (10, 10), (300, 10 + panel_height), (0, 0, 0), -1)
             cv2.rectangle(frame, (10, 10), (300, 10 + panel_height), (0, 255, 0), 2)
             
@@ -1309,9 +1337,14 @@ class ElectronicsDetector:
             cv2.putText(frame, f"Confidence: {self.conf_threshold*100:.0f}%", (20, 112),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
             
+            # Show visualization mode
+            mode_display = "Anchor" if self.visualization_mode == 'anchor' else "Mask"
+            cv2.putText(frame, f"Mode: {mode_display}", (20, 132),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            
             # Show last key press feedback (fades after 2 seconds)
             if last_key_press and time.time() - key_press_time < 2:
-                cv2.putText(frame, f"Key: {last_key_press}", (20, 142),
+                cv2.putText(frame, f"Key: {last_key_press}", (20, 162),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 255, 100), 1)
             
             # Display frame
@@ -1365,6 +1398,14 @@ class ElectronicsDetector:
                     last_key_press = f"T - Thermal Filter {thermal_status}"
                     key_press_time = time.time()
                     print(f"[INFO] Thermal filter: {thermal_status}")
+
+                elif key == ord('m') or key == ord('M'):
+                    # Toggle visualization mode
+                    self.visualization_mode = 'mask' if self.visualization_mode == 'anchor' else 'anchor'
+                    mode_name = "Segmentation Mask" if self.visualization_mode == 'mask' else "Pulsing Anchor"
+                    last_key_press = f"M - {mode_name}"
+                    key_press_time = time.time()
+                    print(f"[INFO] Visualization mode: {mode_name}")
         
         cap.release()
         cv2.destroyAllWindows()
