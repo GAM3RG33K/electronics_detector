@@ -13,7 +13,7 @@ import time
 from collections import defaultdict
 import os
 
-yolo_model_name = 'yolov11n-seg'
+yolo_model_name = 'yolo11n-seg'
 class SystemChecker:
     """Pre-flight system checks before running detector"""
     
