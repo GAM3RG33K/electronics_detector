@@ -12,6 +12,7 @@ from ultralytics import YOLO
 import time
 from collections import defaultdict
 import os
+import argparse
 
 yolo_model_name = 'yolo11n-seg'
 class SystemChecker:
@@ -1264,27 +1265,36 @@ class ElectronicsDetector:
         cv2.circle(frame, (center_x, center_y), 5, color, -1)
         cv2.circle(frame, (center_x, center_y), 8, color, 2)
     
-    def run(self):
+    def run(self, video_source=0):
         """Main detection loop"""
-        print("🎥 Opening camera...")
+        if isinstance(video_source, str):
+            print(f"🎥 Opening video file: {video_source}...")
+        else:
+            print("🎥 Opening camera...")
         
-        # Open camera (0 is usually the default camera)
-        cap = cv2.VideoCapture(0)
+        # Open camera or video file
+        cap = cv2.VideoCapture(video_source)
         
         # Try to set high quality settings
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         cap.set(cv2.CAP_PROP_FPS, 60)
         
-        # Get actual camera settings
+        # Get actual settings
         actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         actual_fps = int(cap.get(cv2.CAP_PROP_FPS))
         
-        print(f"  ✓ Camera: {actual_width}x{actual_height} @ {actual_fps}fps")
+        if isinstance(video_source, str):
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = total_frames / actual_fps if actual_fps > 0 else 0
+            print(f"  ✓ Video: {actual_width}x{actual_height} @ {actual_fps}fps")
+            print(f"  ✓ Duration: {duration:.1f}s ({total_frames} frames)")
+        else:
+            print(f"  ✓ Camera: {actual_width}x{actual_height} @ {actual_fps}fps")
         
         if not cap.isOpened():
-            print("  ✗ Error: Could not open camera")
+            print(f"  ✗ Error: Could not open {'video file' if isinstance(video_source, str) else 'camera'}")
             return
         
         print("\n" + "="*60)
@@ -1500,13 +1510,36 @@ class ElectronicsDetector:
 
 
 if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Electronics Detection System - Real-time device detection with thermal visualization',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Use default camera
+  python electronics_detector.py
+  
+  # Use video file
+  python electronics_detector.py --video path/to/video.mp4
+  
+  # Use video file with custom confidence
+  python electronics_detector.py --video test.mp4 --conf 0.5
+        ''')
+    
+    parser.add_argument('--video', '-v', type=str, default=None,
+                        help='Path to video file (if not specified, uses camera)')
+    parser.add_argument('--conf', '-c', type=float, default=0.3,
+                        help='Initial confidence threshold (0.0-1.0, default: 0.3)')
+    
+    args = parser.parse_args()
+    
     print("\n" + "✈️ "*20)
     print("  TRAVEL ELECTRONICS ENERGY FOOTPRINT DETECTOR")
     print("  Airport & Train Station Deployment")
     print("✈️ "*20)
     
     try:
-        # Step 1: Run system checks
+        # Step 1: Run system checks (skip camera check if using video file)
         checker = SystemChecker()
         checker.print_system_info()
         
@@ -1517,8 +1550,14 @@ if __name__ == "__main__":
         # Step 2: Initialize detector
         detector = ElectronicsDetector()
         
-        # Step 3: Run detection
-        detector.run()
+        # Set custom confidence if provided
+        if args.conf != 0.3:
+            detector.conf_threshold = int(args.conf * 100)
+            print(f"\n🎯 Custom confidence threshold: {detector.conf_threshold}%")
+        
+        # Step 3: Run detection with video source
+        video_source = args.video if args.video else 0
+        detector.run(video_source)
         
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted by user (Ctrl+C)")
